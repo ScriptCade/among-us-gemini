@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Among Us - 2D Canvas Clone</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            overflow: hidden;
+            font-family: 'Verdana', sans-serif;
+            touch-action: none; /* Prevent scroll on mobile */
+            user-select: none;
+        }
+
+        #gameCanvas {
+            display: block;
+        }
+
+        /* UI Overlays */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        /* MINIMAP STYLING */
+        #minimap {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 240px;
+            height: 170px; /* Aspect ratio matches map */
+            background: rgba(0, 0, 0, 0.7);
+            border: 2px solid #777;
+            border-radius: 8px;
+            pointer-events: none;
+            z-index: 50;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+        }
+
+        .hud-btn {
+            pointer-events: auto;
+            position: absolute;
+            background: rgba(255, 255, 255, 0.2);
+            border: 2px solid rgba(255, 255, 255, 0.5);
+            border-radius: 50%;
+            color: white;
+            font-weight: bold;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            backdrop-filter: blur(4px);
+            transition: transform 0.1s, background 0.2s;
+        }
+
+        .hud-btn:active {
+            transform: scale(0.9);
+            background: rgba(255, 255, 255, 0.4);
+        }
+
+        /* Desktop specific positioning */
+        #action-btn { bottom: 30px; right: 30px; width: 80px; height: 80px; font-size: 14px; text-transform: uppercase; }
+        #kill-btn { bottom: 30px; right: 130px; width: 80px; height: 80px; color: #ff4444; border-color: #ff4444; display: none; }
+        #vent-btn { bottom: 120px; right: 30px; width: 60px; height: 60px; display: none; }
+        #role-toggle { top: 20px; left: 20px; width: auto; height: 40px; border-radius: 20px; padding: 0 20px; font-size: 14px; background: rgba(0,0,0,0.5); }
+
+        /* Task Progress Bar */
+        #task-bar-container {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 300px;
+            height: 30px;
+            background: rgba(50, 50, 50, 0.8);
+            border: 2px solid #fff;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        
+        #task-bar-fill {
+            height: 100%;
+            width: 0%;
+            background: #43d854;
+            transition: width 0.1s linear;
+        }
+
+        /* Overlay for "Victory" or "Defeat" */
+        #message-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            pointer-events: auto;
+            z-index: 100;
+        }
+
+        #message-title {
+            font-size: 4rem;
+            font-weight: 900;
+            margin-bottom: 20px;
+        }
+        
+        .crewmate-text { color: #8cffff; }
+        .impostor-text { color: #ff4d4d; }
+
+        #restart-btn {
+            padding: 15px 40px;
+            font-size: 1.5rem;
+            background: white;
+            color: black;
+            border: none;
+            cursor: pointer;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+
+        /* Mobile Controls */
+        #joystick-zone {
+            position: absolute;
+            bottom: 30px;
+            left: 30px;
+            width: 150px;
+            height: 150px;
+            pointer-events: auto;
+        }
+
+        /* Instructions */
+        #controls-hint {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255,255,255,0.5);
+            font-size: 12px;
+            pointer-events: none;
+        }
+
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="ui-layer">
+        <canvas id="minimap" width="240" height="170"></canvas>
+
+        <div id="task-bar-container"><div id="task-bar-fill"></div></div>
+        
+        <div id="role-toggle" class="hud-btn" onclick="game.toggleRole()">Role: Crewmate</div>
+
+        <!-- Touch/Mouse Buttons -->
+        <div id="kill-btn" class="hud-btn" onmousedown="game.tryKill()" ontouchstart="game.tryKill()">KILL (F)</div>
+        <div id="vent-btn" class="hud-btn" onmousedown="game.tryVent()" ontouchstart="game.tryVent()">VENT (V)</div>
+        <div id="action-btn" class="hud-btn" onmousedown="game.startAction()" onmouseup="game.endAction()" ontouchstart="game.startAction()" ontouchend="game.endAction()">USE</div>
+
+        <div id="joystick-zone"></div>
+        
+        <div id="controls-hint">WASD to Move | SPACE to Use | F to Kill | V to Vent</div>
+    </div>
+
+    <div id="message-overlay">
+        <div id="message-title">VICTORY</div>
+        <button id="restart-btn" onclick="game.reset()">PLAY AGAIN</button>
+    </div>
+
+<script>
+/**
+ * AMONG US CLONE - 3x3 Grid Map Version with Minimap
+ */
+
+// --- Constants & Config ---
+const COLORS = {
+    red: '#C51111', blue: '#132ED1', green: '#117F2D', 
+    pink: '#ED54BA', orange: '#EF7D0D', yellow: '#F5F557',
+    black: '#3F474E', white: '#D6E0F0', purple: '#6B2FBC',
+    cyan: '#38FEDC', brown: '#71491E', lime: '#50EF39'
+};
+
+const WALL_COLOR = '#424858';
+const FLOOR_COLOR = '#191c23';
+const PLAYER_SPEED = 5;
+const PLAYER_RADIUS = 18;
+const ROOM_WIDTH = 1200;
+const ROOM_HEIGHT = 850;
+const GRID_ROWS = 3;
+const GRID_COLS = 3;
+const MAP_WIDTH = ROOM_WIDTH * GRID_COLS;
+const MAP_HEIGHT = ROOM_HEIGHT * GRID_ROWS;
+
+// --- Input Handling ---
+class InputHandler {
+    constructor() {
+        this.keys = {};
+        this.joystick = { x: 0, y: 0, active: false };
+        
+        window.addEventListener('keydown', e => this.keys[e.code] = true);
+        window.addEventListener('keyup', e => {
+            this.keys[e.code] = false;
+            if (e.code === 'KeyF') game.tryKill();
+            if (e.code === 'KeyV') game.tryVent();
+            if (e.code === 'Space') game.endAction();
+        });
+        window.addEventListener('keydown', e => {
+            if (e.code === 'Space') game.startAction();
+        });
+
+        // Touch Joystick Logic
+        const zone = document.getElementById('joystick-zone');
+        let startX, startY;
+
+        zone.addEventListener('touchstart', e => {
+            e.preventDefault();
+            const touch = e.touches[0];
+            startX = touch.clientX;
+            startY = touch.clientY;
+            this.joystick.active = true;
+        }, {passive: false});
+
+        zone.addEventListener('touchmove', e => {
+            e.preventDefault();
+            if (!this.joystick.active) return;
+            const touch = e.touches[0];
+            const dx = touch.clientX - startX;
+            const dy = touch.clientY - startY;
+            
+            // Normalize
+            const distance = Math.sqrt(dx*dx + dy*dy);
+            const maxDist = 40;
+            const force = Math.min(distance, maxDist) / maxDist;
+            const angle = Math.atan2(dy, dx);
+            
+            this.joystick.x = Math.cos(angle) * force;
+            this.joystick.y = Math.sin(angle) * force;
+        }, {passive: false});
+
+        const endTouch = (e) => {
+            e.preventDefault();
+            this.joystick.active = false;
+            this.joystick.x = 0;
+            this.joystick.y = 0;
+        };
+        zone.addEventListener('touchend', endTouch);
+        zone.addEventListener('touchcancel', endTouch);
+    }
+
+    getMovement() {
+        let dx = 0, dy = 0;
+        if (this.keys['KeyW'] || this.keys['ArrowUp']) dy -= 1;
+        if (this.keys['KeyS'] || this.keys['ArrowDown']) dy += 1;
+        if (this.keys['KeyA'] || this.keys['ArrowLeft']) dx -= 1;
+        if (this.keys['KeyD'] || this.keys['ArrowRight']) dx += 1;
+
+        if (this.joystick.active) {
+            dx = this.joystick.x;
+            dy = this.joystick.y;
+        }
+
+        if (!this.joystick.active && (dx !== 0 || dy !== 0)) {
+            const len = Math.sqrt(dx*dx + dy*dy);
+            dx /= len;
+            dy /= len;
+        }
+
+        return { x: dx, y: dy };
+    }
+}
+
+// --- Game Classes ---
+
+class Entity {
+    constructor(x, y, color) {
+        this.x = x;
+        this.y = y;
+        this.color = color;
+        this.radius = PLAYER_RADIUS;
+        this.dead = false;
+        this.direction = 1;
+        this.bobOffset = 0;
+        this.isMoving = false;
+    }
+
+    draw(ctx) {
+        if (this.dead) {
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.ellipse(0, 10, 12, 8, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#eee';
+            ctx.fillRect(-3, -5, 6, 15);
+            ctx.beginPath();
+            ctx.arc(-4, -5, 4, 0, Math.PI*2);
+            ctx.arc(4, -5, 4, 0, Math.PI*2);
+            ctx.fill();
+            ctx.restore();
+            return;
+        }
+
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.scale(this.direction, 1);
+
+        const bob = Math.sin(Date.now() / 100) * (this.isMoving ? 2 : 0);
+
+        // Backpack
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.roundRect(-22, -10 + bob, 10, 25, 4); 
+        ctx.fill();
+        ctx.strokeStyle = 'black';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+
+        // Body
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.moveTo(-15, -20 + bob);
+        ctx.lineTo(15, -20 + bob);
+        ctx.bezierCurveTo(25, -20 + bob, 25, 20 + bob, 15, 20 + bob);
+        ctx.lineTo(-15, 20 + bob);
+        ctx.bezierCurveTo(-25, 20 + bob, -25, -20 + bob, -15, -20 + bob);
+        ctx.fill();
+        ctx.stroke();
+
+        // Legs
+        ctx.beginPath();
+        ctx.roundRect(-15, 15 + bob, 10, 12, 4);
+        ctx.roundRect(5, 15 + bob, 10, 12, 4);
+        ctx.fill();
+        ctx.stroke();
+
+        // Visor
+        ctx.fillStyle = '#9BE9F0';
+        ctx.beginPath();
+        ctx.ellipse(8, -8 + bob, 12, 9, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        
+        // Visor Highlight
+        ctx.fillStyle = 'white';
+        ctx.beginPath();
+        ctx.ellipse(10, -11 + bob, 6, 3, 0.2, 0, Math.PI * 2);
+        ctx.globalAlpha = 0.6;
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
+
+        ctx.restore();
+    }
+}
+
+class Player extends Entity {
+    constructor(x, y, color) {
+        super(x, y, color);
+        this.isImpostor = false;
+        this.killCooldown = 0;
+        this.inVent = false;
+    }
+
+    update(dt, input, walls) {
+        if (this.dead || this.inVent) {
+            this.isMoving = false;
+            return;
+        }
+
+        const move = input.getMovement();
+        this.isMoving = (move.x !== 0 || move.y !== 0);
+
+        if (move.x < 0) this.direction = -1;
+        if (move.x > 0) this.direction = 1;
+
+        let nextX = this.x + move.x * PLAYER_SPEED;
+        let nextY = this.y + move.y * PLAYER_SPEED;
+
+        // X Collision
+        if (!this.checkCollision(nextX, this.y, walls)) {
+            this.x = nextX;
+        }
+        // Y Collision
+        if (!this.checkCollision(this.x, nextY, walls)) {
+            this.y = nextY;
+        }
+        
+        // Clamp to Map
+        this.x = Math.max(20, Math.min(MAP_WIDTH - 20, this.x));
+        this.y = Math.max(20, Math.min(MAP_HEIGHT - 20, this.y));
+    }
+
+    checkCollision(x, y, walls) {
+        for (let w of walls) {
+            let testX = x;
+            let testY = y;
+            if (x < w.x) testX = w.x;
+            else if (x > w.x + w.w) testX = w.x + w.w;
+            if (y < w.y) testY = w.y;
+            else if (y > w.y + w.h) testY = w.y + w.h;
+
+            let distX = x - testX;
+            let distY = y - testY;
+            let distance = Math.sqrt((distX*distX) + (distY*distY));
+
+            if (distance <= this.radius) {
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
+class Game {
+    constructor() {
+        this.canvas = document.getElementById('gameCanvas');
+        this.ctx = this.canvas.getContext('2d');
+        
+        // Minimap Setup
+        this.miniCanvas = document.getElementById('minimap');
+        this.miniCtx = this.miniCanvas.getContext('2d');
+
+        this.input = new InputHandler();
+        
+        this.resize();
+        window.addEventListener('resize', () => this.resize());
+
+        this.setupMap();
+        this.reset();
+
+        this.actionHeld = false;
+        this.taskProgress = 0;
+        this.taskTarget = null;
+        
+        this.lastTime = Date.now();
+        requestAnimationFrame(() => this.loop());
+    }
+
+    setupMap() {
+        this.walls = [];
+        this.tasks = [];
+        this.vents = [];
+
+        // --- MAP GENERATION (3x3 Grid) ---
+        for (let row = 0; row < GRID_ROWS; row++) {
+            for (let col = 0; col < GRID_COLS; col++) {
+                this.createRoom(col, row);
+            }
+        }
+    }
+
+    createRoom(gx, gy) {
+        const offX = gx * ROOM_WIDTH;
+        const offY = gy * ROOM_HEIGHT;
+        const doorSize = 200; // Gap width for doors
+
+        // 1. Internal Furniture (Duplicated from Original)
+        // Cafeteria Boxes (Center)
+        this.walls.push({x: offX + 400, y: offY + 300, w: 100, h: 50}); // Table 1
+        this.walls.push({x: offX + 700, y: offY + 300, w: 100, h: 50}); // Table 2
+        // Hallway Walls
+        this.walls.push({x: offX + 300, y: offY + 500, w: 100, h: 300}); // Bottom Left
+        this.walls.push({x: offX + 800, y: offY + 500, w: 100, h: 300}); // Bottom Right
+        this.walls.push({x: offX + 300, y: offY + 50, w: 100, h: 150});  // Top Left
+        this.walls.push({x: offX + 800, y: offY + 50, w: 100, h: 150});  // Top Right
+        // Side Room Dividers
+        this.walls.push({x: offX + 50, y: offY + 350, w: 150, h: 20});
+        this.walls.push({x: offX + 1000, y: offY + 350, w: 150, h: 20});
+
+        // 2. Borders with Doors
+        // TOP WALL
+        if (gy > 0) { // Connect to Room Above
+            this.walls.push({x: offX, y: offY, w: (ROOM_WIDTH - doorSize)/2, h: 50}); // Left segment
+            this.walls.push({x: offX + (ROOM_WIDTH + doorSize)/2, y: offY, w: (ROOM_WIDTH - doorSize)/2, h: 50}); // Right segment
+        } else { // Solid Wall
+            this.walls.push({x: offX, y: offY, w: ROOM_WIDTH, h: 50});
+        }
+        
+        // BOTTOM WALL
+        if (gy < GRID_ROWS - 1) { // Connect to Room Below
+            this.walls.push({x: offX, y: offY + ROOM_HEIGHT - 50, w: (ROOM_WIDTH - doorSize)/2, h: 50});
+            this.walls.push({x: offX + (ROOM_WIDTH + doorSize)/2, y: offY + ROOM_HEIGHT - 50, w: (ROOM_WIDTH - doorSize)/2, h: 50});
+        } else {
+            this.walls.push({x: offX, y: offY + ROOM_HEIGHT - 50, w: ROOM_WIDTH, h: 50});
+        }
+
+        // LEFT WALL
+        if (gx > 0) { // Connect to Left
+            this.walls.push({x: offX, y: offY, w: 50, h: (ROOM_HEIGHT - doorSize)/2});
+            this.walls.push({x: offX, y: offY + (ROOM_HEIGHT + doorSize)/2, w: 50, h: (ROOM_HEIGHT - doorSize)/2});
+        } else {
+            this.walls.push({x: offX, y: offY, w: 50, h: ROOM_HEIGHT});
+        }
+
+        // RIGHT WALL
+        if (gx < GRID_COLS - 1) { // Connect to Right
+            this.walls.push({x: offX + ROOM_WIDTH - 50, y: offY, w: 50, h: (ROOM_HEIGHT - doorSize)/2});
+            this.walls.push({x: offX + ROOM_WIDTH - 50, y: offY + (ROOM_HEIGHT + doorSize)/2, w: 50, h: (ROOM_HEIGHT - doorSize)/2});
+        } else {
+            this.walls.push({x: offX + ROOM_WIDTH - 50, y: offY, w: 50, h: ROOM_HEIGHT});
+        }
+
+        // 3. Tasks (Duplicated)
+        this.tasks.push({x: offX + 100, y: offY + 700, color: 'yellow', completed: false});
+        this.tasks.push({x: offX + 1100, y: offY + 100, color: 'cyan', completed: false});
+        this.tasks.push({x: offX + 600, y: offY + 100, color: 'lime', completed: false});
+        this.tasks.push({x: offX + 600, y: offY + 750, color: 'pink', completed: false});
+
+        // 4. Vents (Duplicated & Linked Locally)
+        // Vent links must be unique IDs to not teleport across map
+        const baseId = (gy * GRID_COLS + gx) * 10;
+        this.vents.push({id: baseId + 1, x: offX + 100, y: offY + 100, link: baseId + 2});
+        this.vents.push({id: baseId + 2, x: offX + 1100, y: offY + 750, link: baseId + 3});
+        this.vents.push({id: baseId + 3, x: offX + 100, y: offY + 750, link: baseId + 1});
+    }
+
+    reset() {
+        // Start player in CENTER room (1, 1)
+        this.player = new Player(ROOM_WIDTH * 1.5, ROOM_HEIGHT * 1.5, COLORS.red);
+        
+        this.dummies = [];
+        this.tasks.forEach(t => t.completed = false);
+        this.totalTasks = this.tasks.length;
+        this.completedTasks = 0;
+        this.updateTaskBar();
+        
+        // Spawn dummies scattered across the big map
+        const dummyColors = [COLORS.blue, COLORS.green, COLORS.pink, COLORS.orange, COLORS.white, 
+                             COLORS.purple, COLORS.brown, COLORS.lime, COLORS.cyan, COLORS.yellow];
+        
+        for(let i=0; i < 25; i++) {
+            // Random room
+            const rx = Math.floor(Math.random() * GRID_COLS);
+            const ry = Math.floor(Math.random() * GRID_ROWS);
+            // Random Pos inside room (padded)
+            const px = (rx * ROOM_WIDTH) + 200 + Math.random() * 800;
+            const py = (ry * ROOM_HEIGHT) + 200 + Math.random() * 400;
+            
+            this.dummies.push(new Entity(px, py, dummyColors[i % dummyColors.length]));
+        }
+
+        document.getElementById('message-overlay').style.display = 'none';
+        this.toggleRole(false);
+    }
+
+    resize() {
+        this.canvas.width = window.innerWidth;
+        this.canvas.height = window.innerHeight;
+    }
+
+    toggleRole(forceChange = true) {
+        if(forceChange) this.player.isImpostor = !this.player.isImpostor;
+        
+        const roleBtn = document.getElementById('role-toggle');
+        const killBtn = document.getElementById('kill-btn');
+        const ventBtn = document.getElementById('vent-btn');
+        const actionBtn = document.getElementById('action-btn');
+
+        if (this.player.isImpostor) {
+            roleBtn.innerText = "Role: Impostor";
+            roleBtn.style.color = "#ff4d4d";
+            roleBtn.style.borderColor = "#ff4d4d";
+            killBtn.style.display = 'flex';
+            ventBtn.style.display = 'flex';
+            actionBtn.innerText = "SABOTAGE";
+            this.player.color = COLORS.red;
+        } else {
+            roleBtn.innerText = "Role: Crewmate";
+            roleBtn.style.color = "#8cffff";
+            roleBtn.style.borderColor = "#8cffff";
+            killBtn.style.display = 'none';
+            ventBtn.style.display = 'none';
+            actionBtn.innerText = "USE";
+            this.player.color = COLORS.cyan;
+        }
+    }
+
+    // --- Mechanics ---
+
+    startAction() {
+        if (this.player.dead || this.player.inVent) return;
+        this.actionHeld = true;
+
+        if (!this.player.isImpostor) {
+            const nearest = this.getNearest(this.tasks, 60);
+            if (nearest && !nearest.completed) {
+                this.taskTarget = nearest;
+            }
+        }
+    }
+
+    endAction() {
+        this.actionHeld = false;
+        this.taskTarget = null;
+        this.taskProgress = 0;
+        this.updateTaskBar(false); 
+    }
+
+    tryKill() {
+        if (!this.player.isImpostor || this.player.dead) return;
+        const target = this.getNearest(this.dummies.filter(d => !d.dead), 80);
+        if (target) {
+            target.dead = true;
+        }
+    }
+
+    tryVent() {
+        if (!this.player.isImpostor || this.player.dead) return;
+
+        if (this.player.inVent) {
+            const currentVent = this.getNearest(this.vents, 9999);
+            const nextVent = this.vents.find(v => v.id === currentVent.link);
+            this.player.x = nextVent.x;
+            this.player.y = nextVent.y;
+            this.player.inVent = false;
+            this.player.visible = true;
+        } else {
+            const nearest = this.getNearest(this.vents, 80);
+            if (nearest) {
+                this.player.x = nearest.x;
+                this.player.y = nearest.y;
+                this.player.inVent = true;
+            }
+        }
+    }
+
+    getNearest(list, range) {
+        let nearest = null;
+        let minDst = range;
+        for(let item of list) {
+            const dx = this.player.x - item.x;
+            const dy = this.player.y - item.y;
+            const dst = Math.sqrt(dx*dx + dy*dy);
+            if (dst < minDst) {
+                minDst = dst;
+                nearest = item;
+            }
+        }
+        return nearest;
+    }
+
+    updateTaskBar(isGlobal = true) {
+        const fill = document.getElementById('task-bar-fill');
+        const pct = (this.completedTasks / this.totalTasks) * 100;
+        fill.style.width = pct + "%";
+        if(this.completedTasks >= this.totalTasks) {
+            this.gameOver("VICTORY", "crewmate-text");
+        }
+    }
+
+    gameOver(text, cls) {
+        const overlay = document.getElementById('message-overlay');
+        const title = document.getElementById('message-title');
+        title.innerText = text;
+        title.className = cls;
+        overlay.style.display = 'flex';
+    }
+
+    // --- Core Loop ---
+
+    loop() {
+        const now = Date.now();
+        const dt = (now - this.lastTime) / 1000;
+        this.lastTime = now;
+        this.update(dt);
+        this.draw();
+        requestAnimationFrame(() => this.loop());
+    }
+
+    update(dt) {
+        this.player.update(dt, this.input, this.walls);
+
+        this.dummies.forEach(d => {
+            if (d.dead) return;
+            if (Math.random() < 0.02) d.direction = Math.random() > 0.5 ? 1 : -1;
+            if (Math.random() < 0.05) d.isMoving = !d.isMoving;
+            if (d.isMoving) {
+                d.x += d.direction * 1;
+                // Simple wall bounce
+                if(this.player.checkCollision(d.x, d.y, this.walls)) d.direction *= -1;
+            }
+        });
+
+        if (this.actionHeld && this.taskTarget) {
+            this.taskProgress += dt;
+            if (this.taskProgress > 1.5) {
+                this.taskTarget.completed = true;
+                this.completedTasks++;
+                this.updateTaskBar();
+                this.taskTarget = null;
+                this.taskProgress = 0;
+                this.actionHeld = false;
+            }
+        } else {
+            this.taskProgress = 0;
+        }
+    }
+
+    draw() {
+        const W = this.canvas.width;
+        const H = this.canvas.height;
+        
+        // --- 1. Draw Minimap ---
+        this.drawMinimap();
+
+        // --- 2. Draw Main Game ---
+        let camX = W/2 - this.player.x;
+        let camY = H/2 - this.player.y;
+
+        // Clamp Camera to world bounds
+        camX = Math.min(0, Math.max(W - MAP_WIDTH, camX));
+        camY = Math.min(0, Math.max(H - MAP_HEIGHT, camY));
+
+        this.ctx.fillStyle = '#000';
+        this.ctx.fillRect(0, 0, W, H);
+        
+        this.ctx.save();
+        this.ctx.translate(camX, camY);
+
+        // Floor (Big Map)
+        this.ctx.fillStyle = FLOOR_COLOR;
+        this.ctx.fillRect(0, 0, MAP_WIDTH, MAP_HEIGHT);
+
+        // Vents
+        this.ctx.fillStyle = '#555';
+        for (let v of this.vents) {
+            this.ctx.beginPath();
+            this.ctx.rect(v.x - 15, v.y - 10, 30, 20);
+            this.ctx.fill();
+            this.ctx.strokeStyle = '#222';
+            this.ctx.stroke();
+            this.ctx.beginPath();
+            this.ctx.moveTo(v.x-10, v.y-10); this.ctx.lineTo(v.x-10, v.y+10);
+            this.ctx.moveTo(v.x, v.y-10); this.ctx.lineTo(v.x, v.y+10);
+            this.ctx.moveTo(v.x+10, v.y-10); this.ctx.lineTo(v.x+10, v.y+10);
+            this.ctx.stroke();
+        }
+
+        // Tasks
+        for (let t of this.tasks) {
+            this.ctx.fillStyle = t.completed ? '#555' : t.color;
+            this.ctx.beginPath();
+            this.ctx.rect(t.x - 15, t.y - 15, 30, 30);
+            this.ctx.fill();
+            if (t === this.taskTarget && this.actionHeld) {
+                this.ctx.strokeStyle = 'white';
+                this.ctx.lineWidth = 3;
+                this.ctx.stroke();
+                this.ctx.fillStyle = 'lime';
+                this.ctx.fillRect(t.x - 20, t.y - 30, 40 * (this.taskProgress / 1.5), 5);
+            }
+        }
+
+        const entities = [...this.dummies, this.player];
+        entities.sort((a, b) => a.y - b.y);
+
+        for (let e of entities) {
+            if (e === this.player && this.player.inVent) continue;
+            e.draw(this.ctx);
+        }
+
+        this.ctx.fillStyle = WALL_COLOR;
+        this.ctx.strokeStyle = '#111';
+        this.ctx.lineWidth = 5;
+        for (let w of this.walls) {
+            this.ctx.fillRect(w.x, w.y, w.w, w.h);
+            this.ctx.strokeRect(w.x, w.y, w.w, w.h);
+        }
+        
+        // World Borders
+        this.ctx.strokeStyle = '#333';
+        this.ctx.lineWidth = 20;
+        this.ctx.strokeRect(0,0,MAP_WIDTH, MAP_HEIGHT);
+
+        this.ctx.restore();
+    }
+
+    drawMinimap() {
+        const ctx = this.miniCtx;
+        const w = this.miniCanvas.width;
+        const h = this.miniCanvas.height;
+        const scaleX = w / MAP_WIDTH;
+        const scaleY = h / MAP_HEIGHT;
+
+        // Clear Minimap
+        ctx.clearRect(0, 0, w, h);
+        
+        ctx.save();
+        ctx.scale(scaleX, scaleY);
+
+        // Draw Walls on Minimap
+        ctx.fillStyle = '#555'; 
+        for(let wall of this.walls) {
+             ctx.fillRect(wall.x, wall.y, wall.w, wall.h);
+        }
+
+        // Draw Tasks on Minimap (If Crewmate)
+        if (!this.player.isImpostor) {
+            ctx.fillStyle = 'yellow';
+            for(let t of this.tasks) {
+                if(!t.completed) {
+                    ctx.beginPath();
+                    // Draw tasks larger on minimap so they are visible
+                    ctx.arc(t.x, t.y, 60, 0, Math.PI*2); 
+                    ctx.fill();
+                }
+            }
+        }
+
+        // Draw Player on Minimap
+        ctx.fillStyle = '#0f0'; // Bright Green
+        ctx.beginPath();
+        ctx.arc(this.player.x, this.player.y, 80, 0, Math.PI*2);
+        ctx.fill();
+
+        ctx.restore();
+    }
+}
+
+const game = new Game();
+</script>
+</body>
+</html>
